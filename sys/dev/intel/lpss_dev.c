@@ -43,16 +43,27 @@ __FBSDID("$FreeBSD$");
 #include <dev/pci/pcireg.h>
 #include <dev/pci/pcivar.h>
 
+#define BIT(nr) (1UL << (nr))
+
 #define LPSS_PRIV_OFFSET	0x200
 #define LPSS_PRIV_SIZE		0x100
 #define LPSS_PRIV_CAPS		0xfc
 #define LPSS_PRIV_CAPS_TYPE_SHIFT	4
 #define LPSS_PRIV_CAPS_TYPE_MASK	(0xf << LPSS_PRIV_CAPS_TYPE_SHIFT)
+#define LPSS_PRIV_CAPS_NO_IDMA		BIT(8)
+#define LPSS_PRIV_REMAP_ADDR		0x40
+#define LPSS_PRIV_RESETS		0x04
+#define LPSS_PRIV_RESETS_FUNC		BIT(2)
+#define LPSS_PRIV_RESETS_IDMA		0x3
+#define LPSS_PRIV_SSP_REG		0x20
+#define LPSS_PRIV_SSP_REG_DIS_DMA_FIN	BIT(0)
 
 #define LPSS_PRIV_READ_4(sc, offset) \
 	bus_read_4((sc), LPSS_PRIV_OFFSET + (offset))
 #define LPSS_PRIV_WRITE_4(sc, offset, value) \
 	bus_write_4((sc), LPSS_PRIV_OFFSET + (offset), (value))
+#define LPSS_PRIV_WRITE_8(sc, offset, value) \
+	bus_write_8((sc), LPSS_PRIV_OFFSET + (offset), (value))
 
 struct lpss_softc {
 	device_t		sc_dev;
@@ -104,10 +115,119 @@ lpss_pci_probe(device_t dev)
 	return ENXIO;
 }
 
+static bool intel_lpss_has_idma(const struct lpss_softc *sc)
+{
+	return (sc->sc_caps & LPSS_PRIV_CAPS_NO_IDMA) == 0;
+}
+
+static void intel_lpss_set_remap_addr(const struct lpss_softc *sc)
+{
+	LPSS_PRIV_WRITE_8(sc->sc_mem_res, LPSS_PRIV_REMAP_ADDR, (uintptr_t)sc->sc_mem_res);
+}
+
+static void intel_lpss_deassert_reset(const struct lpss_softc *sc)
+{
+	uint32_t value = LPSS_PRIV_RESETS_FUNC | LPSS_PRIV_RESETS_IDMA;
+
+	/* Bring out the device from reset */
+	LPSS_PRIV_WRITE_4(sc->sc_mem_res, LPSS_PRIV_RESETS, value);
+}
+
+static void lpss_init_dev(const struct lpss_softc *sc)
+{
+	uint32_t value = LPSS_PRIV_SSP_REG_DIS_DMA_FIN;
+
+	intel_lpss_deassert_reset(sc);
+
+	if (!intel_lpss_has_idma(sc))
+		return;
+
+	intel_lpss_set_remap_addr(sc);
+
+	/* Make sure that SPI multiblock DMA transfers are re-enabled */
+	if (sc->sc_type == LPSS_PRIV_TYPE_SPI)
+		LPSS_PRIV_WRITE_4(sc->sc_mem_res, LPSS_PRIV_SSP_REG, value);
+}
+
+static int intel_lpss_register_clock_divider(struct lpss_softc *sc)
+{
+// 	char name[32];
+// 	struct clk *tmp = *clk;
+//
+// 	snprintf(name, sizeof(name), "%s-enable", devname);
+// 	tmp = clk_register_gate(NULL, name, __clk_get_name(tmp), 0,
+// 				lpss->priv, 0, 0, NULL);
+// 	if (IS_ERR(tmp))
+// 		return PTR_ERR(tmp);
+//
+// 	snprintf(name, sizeof(name), "%s-div", devname);
+// 	tmp = clk_register_fractional_divider(NULL, name, __clk_get_name(tmp),
+// 					      0, lpss->priv, 1, 15, 16, 15, 0,
+// 					      NULL);
+// 	if (IS_ERR(tmp))
+// 		return PTR_ERR(tmp);
+// 	*clk = tmp;
+//
+// 	snprintf(name, sizeof(name), "%s-update", devname);
+// 	tmp = clk_register_gate(NULL, name, __clk_get_name(tmp),
+// 				CLK_SET_RATE_PARENT, lpss->priv, 31, 0, NULL);
+// 	if (IS_ERR(tmp))
+// 		return PTR_ERR(tmp);
+// 	*clk = tmp;
+
+	return 0;
+}
+
+static int intel_lpss_register_clock(struct lpss_softc *sc)
+{
+// 	const struct mfd_cell *cell = lpss->cell;
+// 	struct clk *clk;
+// 	char devname[24];
+	int ret;
+
+	if (!sc->sc_clock_rate)
+		return 0;
+
+// 	/* Root clock */
+// 	clk = clk_register_fixed_rate(NULL, dev_name(lpss->dev), NULL,
+// 				      CLK_IS_ROOT, sc->sc_clock_rate);
+// 	if (IS_ERR(clk))
+// 		return PTR_ERR(clk);
+//
+// 	snprintf(devname, sizeof(devname), "%s.%d", cell->name, lpss->devid);
+
+	/*
+	 * Support for clock divider only if it has some preset value.
+	 * Otherwise we assume that the divider is not used.
+	 */
+	if (sc->sc_type != LPSS_PRIV_TYPE_I2C) {
+		ret = intel_lpss_register_clock_divider(sc);
+		if (ret)
+			goto err_clk_register;
+	}
+
+// 	ret = -ENOMEM;
+//
+// 	/* Clock for the host controller */
+// 	lpss->clock = clkdev_create(clk, lpss->info->clk_con_id, "%s", devname);
+// 	if (!lpss->clock)
+// 		goto err_clk_register;
+//
+// 	lpss->clk = clk;
+
+	return 0;
+
+err_clk_register:
+// 	intel_lpss_unregister_clock_tree(clk);
+
+	return ret;
+}
+
 static int
 lpss_pci_attach(device_t dev)
 {
 	struct lpss_softc *sc;
+    int ret;
 
 	sc = device_get_softc(dev);
 
@@ -116,7 +236,7 @@ lpss_pci_attach(device_t dev)
 		goto error;
 	}
 	sc->sc_dev = dev;
-	sc->sc_mem_rid = 0;
+	sc->sc_mem_rid = 0x10;
 	sc->sc_mem_res = bus_alloc_resource_any(sc->sc_dev,
 	    SYS_RES_MEMORY, &sc->sc_mem_rid, RF_ACTIVE);
 	if (sc->sc_mem_res == NULL) {
@@ -124,14 +244,6 @@ lpss_pci_attach(device_t dev)
 		goto error;
 	}
 
-	sc->sc_irq_rid = 0;
-	sc->sc_irq_res = bus_alloc_resource_any(sc->sc_dev,
-	    SYS_RES_IRQ, &sc->sc_irq_rid, RF_ACTIVE);
-	if (sc->sc_irq_res == NULL) {
-		device_printf(dev, "Can't allocate IRQ resource\n");
-		goto error;
-	}
-	device_printf(dev, "IRQ: %d\n", sc->sc_caps);
 	sc->sc_caps = LPSS_PRIV_READ_4(sc->sc_mem_res, LPSS_PRIV_CAPS);
 	device_printf(dev, "Capabilities: 0x%08x\n", sc->sc_caps);
 	sc->sc_type = (sc->sc_caps & LPSS_PRIV_CAPS_TYPE_MASK) >> LPSS_PRIV_CAPS_TYPE_SHIFT;
@@ -143,6 +255,14 @@ lpss_pci_attach(device_t dev)
 			sc->sc_type == LPSS_PRIV_TYPE_I2C ? "I2C" :
 			sc->sc_type == LPSS_PRIV_TYPE_UART ? "UART" :
 			sc->sc_type == LPSS_PRIV_TYPE_SPI ? "SPI" : "Unknown");
+
+	lpss_init_dev(sc);
+
+	ret = intel_lpss_register_clock(sc);
+	if (ret)
+		goto error;
+
+// 	intel_lpss_ltr_expose(sc);
 
 	return bus_generic_attach(dev);
 

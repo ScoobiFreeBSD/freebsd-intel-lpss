@@ -1,6 +1,7 @@
 
 # $FreeBSD$
 
+SRCTOP?=	../../../..
 .PATH:	${SRCTOP}/sys/dev/intel
 
 KMOD=	lpss
