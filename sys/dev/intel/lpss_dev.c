@@ -45,25 +45,49 @@ __FBSDID("$FreeBSD$");
 
 #define BIT(nr) (1UL << (nr))
 
+#define LPSS_DEV_OFFSET		0x000
+#define LPSS_DEV_SIZE		0x200
 #define LPSS_PRIV_OFFSET	0x200
 #define LPSS_PRIV_SIZE		0x100
+#define LPSS_PRIV_REG_COUNT	(LPSS_PRIV_SIZE / 4)
+#define LPSS_IDMA64_OFFSET	0x800
+#define LPSS_IDMA64_SIZE	0x800
+
+/* Offsets from lpss->priv */
+#define LPSS_PRIV_RESETS		0x04
+#define LPSS_PRIV_RESETS_IDMA		BIT(2)
+#define LPSS_PRIV_RESETS_FUNC		0x3
+
+#define LPSS_PRIV_ACTIVELTR		0x10
+#define LPSS_PRIV_IDLELTR		0x14
+
+#define LPSS_PRIV_LTR_REQ		BIT(15)
+#define LPSS_PRIV_LTR_SCALE_MASK	0xc00
+#define LPSS_PRIV_LTR_SCALE_1US		0x800
+#define LPSS_PRIV_LTR_SCALE_32US	0xc00
+#define LPSS_PRIV_LTR_VALUE_MASK	0x3ff
+
+#define LPSS_PRIV_SSP_REG		0x20
+#define LPSS_PRIV_REMAP_ADDR		0x40
+
 #define LPSS_PRIV_CAPS		0xfc
 #define LPSS_PRIV_CAPS_TYPE_SHIFT	4
 #define LPSS_PRIV_CAPS_TYPE_MASK	(0xf << LPSS_PRIV_CAPS_TYPE_SHIFT)
 #define LPSS_PRIV_CAPS_NO_IDMA		BIT(8)
-#define LPSS_PRIV_REMAP_ADDR		0x40
-#define LPSS_PRIV_RESETS		0x04
-#define LPSS_PRIV_RESETS_FUNC		BIT(2)
-#define LPSS_PRIV_RESETS_IDMA		0x3
-#define LPSS_PRIV_SSP_REG		0x20
 #define LPSS_PRIV_SSP_REG_DIS_DMA_FIN	BIT(0)
 
 #define LPSS_PRIV_READ_4(sc, offset) \
-	bus_read_4((sc), LPSS_PRIV_OFFSET + (offset))
-#define LPSS_PRIV_WRITE_4(sc, offset, value) \
-	bus_write_4((sc), LPSS_PRIV_OFFSET + (offset), (value))
-#define LPSS_PRIV_WRITE_8(sc, offset, value) \
-	bus_write_8((sc), LPSS_PRIV_OFFSET + (offset), (value))
+	bus_read_4(&(sc)->sc_map_priv, (offset))
+#define LPSS_PRIV_WRITE_4(res, offset, value) \
+	bus_write_4(&(sc)->sc_map_priv, (offset), (value))
+#define LPSS_PRIV_WRITE_8(res, offset, value) \
+	bus_write_8(&(sc)->sc_map_priv, (offset), (value))
+
+static void lo_hi_writeq(const struct resource_map *map, unsigned long addr, uint64_t value)
+{
+	bus_write_4(map, addr, value & 0xffffffff);
+	bus_write_4(map, addr + 4, value >> 32);
+}
 
 struct lpss_softc {
 	device_t		sc_dev;
@@ -72,6 +96,8 @@ struct lpss_softc {
 	int			sc_irq_rid;
 	struct resource		*sc_irq_res;
 	void			*sc_irq_ih;
+	struct resource_map	sc_map_dev;
+	struct resource_map	sc_map_priv;
 	unsigned long 		sc_clock_rate;
 	uint32_t		sc_caps;
 	int			sc_type;	// LPSS_PRIV_TYPE_*
@@ -81,15 +107,229 @@ struct lpss_softc {
 #define LPSS_PRIV_TYPE_MAX	LPSS_PRIV_TYPE_SPI
 };
 
-static const struct {
+struct device;
+struct resource;
+struct property_entry
+{
+	const char *name;
+	uint32_t value;
+};
+
+#define PROPERTY_ENTRY_U32(_name, _value) { .name = _name, .value = _value }
+#define PROPERTY_ENTRY_BOOL(_name) PROPERTY_ENTRY_U32(_name, 0)
+
+struct intel_lpss_platform_info {
+	struct resource *mem;
+	int irq;
+	unsigned long clock_rate;
+	const char *clock_con_id;
+	struct property_entry *properties;
+};
+
+static const struct intel_lpss_platform_info spt_info = {
+	.clock_rate = 120000000,
+};
+
+static struct property_entry spt_i2c_properties[] = {
+	PROPERTY_ENTRY_U32("i2c-sda-hold-time-ns", 230),
+	{ },
+};
+
+static const struct intel_lpss_platform_info spt_i2c_info = {
+	.clock_rate = 120000000,
+	.properties = spt_i2c_properties,
+};
+
+static struct property_entry uart_properties[] = {
+	PROPERTY_ENTRY_U32("reg-io-width", 4),
+	PROPERTY_ENTRY_U32("reg-shift", 2),
+	PROPERTY_ENTRY_BOOL("snps,uart-16550-compatible"),
+	{ },
+};
+
+static const struct intel_lpss_platform_info spt_uart_info = {
+	.clock_rate = 120000000,
+	.clock_con_id = "baudclk",
+	.properties = uart_properties,
+};
+
+static const struct intel_lpss_platform_info bxt_info = {
+	.clock_rate = 100000000,
+};
+
+static const struct intel_lpss_platform_info bxt_uart_info = {
+	.clock_rate = 100000000,
+	.clock_con_id = "baudclk",
+	.properties = uart_properties,
+};
+
+static struct property_entry bxt_i2c_properties[] = {
+	PROPERTY_ENTRY_U32("i2c-sda-hold-time-ns", 42),
+	PROPERTY_ENTRY_U32("i2c-sda-falling-time-ns", 171),
+	PROPERTY_ENTRY_U32("i2c-scl-falling-time-ns", 208),
+	{ },
+};
+
+static const struct intel_lpss_platform_info bxt_i2c_info = {
+	.clock_rate = 133000000,
+	.properties = bxt_i2c_properties,
+};
+
+static struct property_entry apl_i2c_properties[] = {
+	PROPERTY_ENTRY_U32("i2c-sda-hold-time-ns", 207),
+	PROPERTY_ENTRY_U32("i2c-sda-falling-time-ns", 171),
+	PROPERTY_ENTRY_U32("i2c-scl-falling-time-ns", 208),
+	{ },
+};
+
+static const struct intel_lpss_platform_info apl_i2c_info = {
+	.clock_rate = 133000000,
+	.properties = apl_i2c_properties,
+};
+
+static const struct intel_lpss_platform_info cnl_i2c_info = {
+	.clock_rate = 216000000,
+	.properties = spt_i2c_properties,
+};
+static const struct
+{
 	uint16_t vendor;
 	uint16_t device;
-	unsigned long clock_rate;
-} lpss_pci_ids[] = {
-	{ 0x8086, 0x9d61, 120000000 },
-	{ 0x8086, 0xa368, 120000000 },
-	{ 0x8086, 0xa369, 120000000 },
-	{      0,      0,         0 }
+	const struct intel_lpss_platform_info *info;
+} intel_lpss_pci_ids[] = {
+	/* BXT A-Step */
+	{ 0x8086, 0x0aac, &bxt_i2c_info },
+	{ 0x8086, 0x0aae, &bxt_i2c_info },
+	{ 0x8086, 0x0ab0, &bxt_i2c_info },
+	{ 0x8086, 0x0ab2, &bxt_i2c_info },
+	{ 0x8086, 0x0ab4, &bxt_i2c_info },
+	{ 0x8086, 0x0ab6, &bxt_i2c_info },
+	{ 0x8086, 0x0ab8, &bxt_i2c_info },
+	{ 0x8086, 0x0aba, &bxt_i2c_info },
+	{ 0x8086, 0x0abc, &bxt_uart_info },
+	{ 0x8086, 0x0abe, &bxt_uart_info },
+	{ 0x8086, 0x0ac0, &bxt_uart_info },
+	{ 0x8086, 0x0ac2, &bxt_info },
+	{ 0x8086, 0x0ac4, &bxt_info },
+	{ 0x8086, 0x0ac6, &bxt_info },
+	{ 0x8086, 0x0aee, &bxt_uart_info },
+	/* BXT B-Step */
+	{ 0x8086, 0x1aac, &bxt_i2c_info },
+	{ 0x8086, 0x1aae, &bxt_i2c_info },
+	{ 0x8086, 0x1ab0, &bxt_i2c_info },
+	{ 0x8086, 0x1ab2, &bxt_i2c_info },
+	{ 0x8086, 0x1ab4, &bxt_i2c_info },
+	{ 0x8086, 0x1ab6, &bxt_i2c_info },
+	{ 0x8086, 0x1ab8, &bxt_i2c_info },
+	{ 0x8086, 0x1aba, &bxt_i2c_info },
+	{ 0x8086, 0x1abc, &bxt_uart_info },
+	{ 0x8086, 0x1abe, &bxt_uart_info },
+	{ 0x8086, 0x1ac0, &bxt_uart_info },
+	{ 0x8086, 0x1ac2, &bxt_info },
+	{ 0x8086, 0x1ac4, &bxt_info },
+	{ 0x8086, 0x1ac6, &bxt_info },
+	{ 0x8086, 0x1aee, &bxt_uart_info },
+	/* GLK */
+	{ 0x8086, 0x31ac, &bxt_i2c_info },
+	{ 0x8086, 0x31ae, &bxt_i2c_info },
+	{ 0x8086, 0x31b0, &bxt_i2c_info },
+	{ 0x8086, 0x31b2, &bxt_i2c_info },
+	{ 0x8086, 0x31b4, &bxt_i2c_info },
+	{ 0x8086, 0x31b6, &bxt_i2c_info },
+	{ 0x8086, 0x31b8, &bxt_i2c_info },
+	{ 0x8086, 0x31ba, &bxt_i2c_info },
+	{ 0x8086, 0x31bc, &bxt_uart_info },
+	{ 0x8086, 0x31be, &bxt_uart_info },
+	{ 0x8086, 0x31c0, &bxt_uart_info },
+	{ 0x8086, 0x31ee, &bxt_uart_info },
+	{ 0x8086, 0x31c2, &bxt_info },
+	{ 0x8086, 0x31c4, &bxt_info },
+	{ 0x8086, 0x31c6, &bxt_info },
+	/* ICL-LP */
+	{ 0x8086, 0x34a8, &spt_uart_info },
+	{ 0x8086, 0x34a9, &spt_uart_info },
+	{ 0x8086, 0x34aa, &spt_info },
+	{ 0x8086, 0x34ab, &spt_info },
+	{ 0x8086, 0x34c5, &bxt_i2c_info },
+	{ 0x8086, 0x34c6, &bxt_i2c_info },
+	{ 0x8086, 0x34c7, &spt_uart_info },
+	{ 0x8086, 0x34e8, &bxt_i2c_info },
+	{ 0x8086, 0x34e9, &bxt_i2c_info },
+	{ 0x8086, 0x34ea, &bxt_i2c_info },
+	{ 0x8086, 0x34eb, &bxt_i2c_info },
+	{ 0x8086, 0x34fb, &spt_info },
+	/* APL */
+	{ 0x8086, 0x5aac, &apl_i2c_info },
+	{ 0x8086, 0x5aae, &apl_i2c_info },
+	{ 0x8086, 0x5ab0, &apl_i2c_info },
+	{ 0x8086, 0x5ab2, &apl_i2c_info },
+	{ 0x8086, 0x5ab4, &apl_i2c_info },
+	{ 0x8086, 0x5ab6, &apl_i2c_info },
+	{ 0x8086, 0x5ab8, &apl_i2c_info },
+	{ 0x8086, 0x5aba, &apl_i2c_info },
+	{ 0x8086, 0x5abc, &bxt_uart_info },
+	{ 0x8086, 0x5abe, &bxt_uart_info },
+	{ 0x8086, 0x5ac0, &bxt_uart_info },
+	{ 0x8086, 0x5ac2, &bxt_info },
+	{ 0x8086, 0x5ac4, &bxt_info },
+	{ 0x8086, 0x5ac6, &bxt_info },
+	{ 0x8086, 0x5aee, &bxt_uart_info },
+	/* SPT-LP */
+	{ 0x8086, 0x9d27, &spt_uart_info },
+	{ 0x8086, 0x9d28, &spt_uart_info },
+	{ 0x8086, 0x9d29, &spt_info },
+	{ 0x8086, 0x9d2a, &spt_info },
+	{ 0x8086, 0x9d60, &spt_i2c_info },
+	{ 0x8086, 0x9d61, &spt_i2c_info },
+	{ 0x8086, 0x9d62, &spt_i2c_info },
+	{ 0x8086, 0x9d63, &spt_i2c_info },
+	{ 0x8086, 0x9d64, &spt_i2c_info },
+	{ 0x8086, 0x9d65, &spt_i2c_info },
+	{ 0x8086, 0x9d66, &spt_uart_info },
+	/* CNL-LP */
+	{ 0x8086, 0x9da8, &spt_uart_info },
+	{ 0x8086, 0x9da9, &spt_uart_info },
+	{ 0x8086, 0x9daa, &spt_info },
+	{ 0x8086, 0x9dab, &spt_info },
+	{ 0x8086, 0x9dfb, &spt_info },
+	{ 0x8086, 0x9dc5, &cnl_i2c_info },
+	{ 0x8086, 0x9dc6, &cnl_i2c_info },
+	{ 0x8086, 0x9dc7, &spt_uart_info },
+	{ 0x8086, 0x9de8, &cnl_i2c_info },
+	{ 0x8086, 0x9de9, &cnl_i2c_info },
+	{ 0x8086, 0x9dea, &cnl_i2c_info },
+	{ 0x8086, 0x9deb, &cnl_i2c_info },
+	/* SPT-H */
+	{ 0x8086, 0xa127, &spt_uart_info },
+	{ 0x8086, 0xa128, &spt_uart_info },
+	{ 0x8086, 0xa129, &spt_info },
+	{ 0x8086, 0xa12a, &spt_info },
+	{ 0x8086, 0xa160, &spt_i2c_info },
+	{ 0x8086, 0xa161, &spt_i2c_info },
+	{ 0x8086, 0xa162, &spt_i2c_info },
+	{ 0x8086, 0xa166, &spt_uart_info },
+	/* KBL-H */
+	{ 0x8086, 0xa2a7, &spt_uart_info },
+	{ 0x8086, 0xa2a8, &spt_uart_info },
+	{ 0x8086, 0xa2a9, &spt_info },
+	{ 0x8086, 0xa2aa, &spt_info },
+	{ 0x8086, 0xa2e0, &spt_i2c_info },
+	{ 0x8086, 0xa2e1, &spt_i2c_info },
+	{ 0x8086, 0xa2e2, &spt_i2c_info },
+	{ 0x8086, 0xa2e3, &spt_i2c_info },
+	{ 0x8086, 0xa2e6, &spt_uart_info },
+	/* CNL-H */
+	{ 0x8086, 0xa328, &spt_uart_info },
+	{ 0x8086, 0xa329, &spt_uart_info },
+	{ 0x8086, 0xa32a, &spt_info },
+	{ 0x8086, 0xa32b, &spt_info },
+	{ 0x8086, 0xa37b, &spt_info },
+	{ 0x8086, 0xa347, &spt_uart_info },
+	{ 0x8086, 0xa368, &cnl_i2c_info },
+	{ 0x8086, 0xa369, &cnl_i2c_info },
+	{ 0x8086, 0xa36a, &cnl_i2c_info },
+	{ 0x8086, 0xa36b, &cnl_i2c_info },
+	{ }
 };
 
 static int
@@ -97,17 +337,19 @@ lpss_pci_probe(device_t dev)
 {
 	int i;
 
-	for (i = 0; lpss_pci_ids[i].vendor != 0; ++i) {
-		if (pci_get_vendor(dev) == lpss_pci_ids[i].vendor &&
-		    pci_get_device(dev) == lpss_pci_ids[i].device)
+	for (i = 0; intel_lpss_pci_ids[i].vendor != 0; ++i) {
+		if (pci_get_vendor(dev) == intel_lpss_pci_ids[i].vendor &&
+		    pci_get_device(dev) == intel_lpss_pci_ids[i].device)
 		{
 			struct lpss_softc *sc;
 
+#if 0
 			device_printf(dev, "Found PCI device 0x%04x:0x%04x\n",
-					lpss_pci_ids[i].vendor,
-					lpss_pci_ids[i].device);
+					intel_lpss_pci_ids[i].vendor,
+					intel_lpss_pci_ids[i].device);
+#endif
 			sc = device_get_softc(dev);
-			sc->sc_clock_rate = lpss_pci_ids[i].clock_rate;
+			sc->sc_clock_rate = intel_lpss_pci_ids[i].info->clock_rate;
 			device_set_desc(dev, "Intel LPSS PCI Driver");
 			return (BUS_PROBE_DEFAULT);
 		}
@@ -122,7 +364,9 @@ static bool intel_lpss_has_idma(const struct lpss_softc *sc)
 
 static void intel_lpss_set_remap_addr(const struct lpss_softc *sc)
 {
-	LPSS_PRIV_WRITE_8(sc->sc_mem_res, LPSS_PRIV_REMAP_ADDR, (uintptr_t)sc->sc_mem_res);
+	//lo_hi_writeq(addr, lpss->priv + LPSS_PRIV_REMAP_ADDR);
+
+	lo_hi_writeq(&sc->sc_map_priv, LPSS_PRIV_REMAP_ADDR, (uintptr_t)sc->sc_map_priv.r_vaddr);
 }
 
 static void intel_lpss_deassert_reset(const struct lpss_softc *sc)
@@ -130,10 +374,10 @@ static void intel_lpss_deassert_reset(const struct lpss_softc *sc)
 	uint32_t value = LPSS_PRIV_RESETS_FUNC | LPSS_PRIV_RESETS_IDMA;
 
 	/* Bring out the device from reset */
-	LPSS_PRIV_WRITE_4(sc->sc_mem_res, LPSS_PRIV_RESETS, value);
+	LPSS_PRIV_WRITE_4(sc, LPSS_PRIV_RESETS, value);
 }
 
-static void lpss_init_dev(const struct lpss_softc *sc)
+static void intel_lpss_init_dev(const struct lpss_softc *sc)
 {
 	uint32_t value = LPSS_PRIV_SSP_REG_DIS_DMA_FIN;
 
@@ -146,9 +390,10 @@ static void lpss_init_dev(const struct lpss_softc *sc)
 
 	/* Make sure that SPI multiblock DMA transfers are re-enabled */
 	if (sc->sc_type == LPSS_PRIV_TYPE_SPI)
-		LPSS_PRIV_WRITE_4(sc->sc_mem_res, LPSS_PRIV_SSP_REG, value);
+		LPSS_PRIV_WRITE_4(sc, LPSS_PRIV_SSP_REG, value);
 }
 
+#if 0
 static int intel_lpss_register_clock_divider(struct lpss_softc *sc)
 {
 // 	char name[32];
@@ -209,7 +454,7 @@ static int intel_lpss_register_clock(struct lpss_softc *sc)
 // 	ret = -ENOMEM;
 //
 // 	/* Clock for the host controller */
-// 	lpss->clock = clkdev_create(clk, lpss->info->clk_con_id, "%s", devname);
+// 	lpss->clock = clkdev_create(clk, lpss->info->clock_con_id, "%s", devname);
 // 	if (!lpss->clock)
 // 		goto err_clk_register;
 //
@@ -222,12 +467,13 @@ err_clk_register:
 
 	return ret;
 }
+#endif
 
 static int
 lpss_pci_attach(device_t dev)
 {
 	struct lpss_softc *sc;
-    int ret;
+	struct resource_map_request map_req;
 
 	sc = device_get_softc(dev);
 
@@ -236,7 +482,7 @@ lpss_pci_attach(device_t dev)
 		goto error;
 	}
 	sc->sc_dev = dev;
-	sc->sc_mem_rid = 0x10;
+	sc->sc_mem_rid = PCIR_BAR(0);
 	sc->sc_mem_res = bus_alloc_resource_any(sc->sc_dev,
 	    SYS_RES_MEMORY, &sc->sc_mem_rid, RF_ACTIVE);
 	if (sc->sc_mem_res == NULL) {
@@ -244,7 +490,38 @@ lpss_pci_attach(device_t dev)
 		goto error;
 	}
 
-	sc->sc_caps = LPSS_PRIV_READ_4(sc->sc_mem_res, LPSS_PRIV_CAPS);
+	sc->sc_irq_rid = 0;
+	sc->sc_irq_res = bus_alloc_resource_any(sc->sc_dev,
+	    SYS_RES_IRQ, &sc->sc_irq_rid, RF_ACTIVE | RF_SHAREABLE);
+	if (sc->sc_irq_res == NULL) {
+		device_printf(dev, "Can't allocate IRQ resource\n");
+		goto error;
+	}
+	device_printf(dev, "IRQ: %d\n", sc->sc_irq_rid);
+
+	/* Set up DEV memory region */
+	resource_init_map_request(&map_req);
+	map_req.offset = LPSS_DEV_OFFSET;
+	map_req.length = LPSS_DEV_SIZE;
+	if (bus_map_resource(sc->sc_dev, SYS_RES_MEMORY, sc->sc_mem_res,
+				&map_req, &sc->sc_map_dev) != 0)
+	{
+		device_printf(dev, "Can't map DEV memory resource\n");
+		goto error;
+	}
+
+	/* Set up PRIV memory region */
+	resource_init_map_request(&map_req);
+	map_req.offset = LPSS_PRIV_OFFSET;
+	map_req.length = LPSS_PRIV_SIZE;
+	if (bus_map_resource(sc->sc_dev, SYS_RES_MEMORY, sc->sc_mem_res,
+				&map_req, &sc->sc_map_priv) != 0)
+	{
+		device_printf(dev, "Can't map PRIV memory resource\n");
+		goto error;
+	}
+
+	sc->sc_caps = LPSS_PRIV_READ_4(sc, LPSS_PRIV_CAPS);
 	device_printf(dev, "Capabilities: 0x%08x\n", sc->sc_caps);
 	sc->sc_type = (sc->sc_caps & LPSS_PRIV_CAPS_TYPE_MASK) >> LPSS_PRIV_CAPS_TYPE_SHIFT;
 	if (sc->sc_type > LPSS_PRIV_TYPE_MAX) {
@@ -256,13 +533,7 @@ lpss_pci_attach(device_t dev)
 			sc->sc_type == LPSS_PRIV_TYPE_UART ? "UART" :
 			sc->sc_type == LPSS_PRIV_TYPE_SPI ? "SPI" : "Unknown");
 
-	lpss_init_dev(sc);
-
-	ret = intel_lpss_register_clock(sc);
-	if (ret)
-		goto error;
-
-// 	intel_lpss_ltr_expose(sc);
+	intel_lpss_init_dev(sc);
 
 	return bus_generic_attach(dev);
 
