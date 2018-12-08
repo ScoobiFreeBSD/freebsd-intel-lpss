@@ -1,6 +1,9 @@
 # Makefile with convenience development targets.
 
 MODULE_DIR=	sys/modules/intel/lpss
+LINUX_SRC_DIR=	$(HOME)/Projects/linux-4.19.6
+
+TAGS_SEARCH_DIRS=	. $(LINUX_SRC_DIR)
 
 # Are we running as root?
 ID!=	id -u
@@ -27,6 +30,7 @@ uninstall:
 	${SUDO} rm -f /boot/modules/lpss.ko
 
 tags:
-	find . -type f -name '*.[ch]' -print0 | xargs -0 $(CTAGS) -f "$(TAGSFILE)"
+	rm -f "$(TAGSFILE)"
+	find $(TAGS_SEARCH_DIRS) -type f -name '*.[ch]' -print0 | xargs -0 $(CTAGS) -a -f "$(TAGSFILE)"
 
 .PHONY: all module clean install uninstall tags

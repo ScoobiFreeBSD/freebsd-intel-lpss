@@ -53,7 +53,7 @@ __FBSDID("$FreeBSD$");
 #define LPSS_IDMA64_OFFSET	0x800
 #define LPSS_IDMA64_SIZE	0x800
 
-/* Offsets from lpss->priv */
+/* Offsets from lpss->sc_map_priv */
 #define LPSS_PRIV_RESETS		0x04
 #define LPSS_PRIV_RESETS_IDMA		BIT(2)
 #define LPSS_PRIV_RESETS_FUNC		0x3
@@ -83,6 +83,13 @@ __FBSDID("$FreeBSD$");
 #define LPSS_PRIV_WRITE_8(res, offset, value) \
 	bus_write_8(&(sc)->sc_map_priv, (offset), (value))
 
+/* This matches the type field in CAPS register */
+enum intel_lpss_dev_type {
+	LPSS_DEV_I2C = 0,
+	LPSS_DEV_UART,
+	LPSS_DEV_SPI,
+};
+
 static void lo_hi_writeq(const struct resource_map *map, unsigned long addr, uint64_t value)
 {
 	bus_write_4(map, addr, value & 0xffffffff);
@@ -105,6 +112,7 @@ struct lpss_softc {
 #define LPSS_PRIV_TYPE_UART	1
 #define LPSS_PRIV_TYPE_SPI	2
 #define LPSS_PRIV_TYPE_MAX	LPSS_PRIV_TYPE_SPI
+	uint32_t                priv_ctx[LPSS_PRIV_REG_COUNT];
 };
 
 struct device;
@@ -364,110 +372,31 @@ static bool intel_lpss_has_idma(const struct lpss_softc *sc)
 
 static void intel_lpss_set_remap_addr(const struct lpss_softc *sc)
 {
-	//lo_hi_writeq(addr, lpss->priv + LPSS_PRIV_REMAP_ADDR);
-
-	lo_hi_writeq(&sc->sc_map_priv, LPSS_PRIV_REMAP_ADDR, (uintptr_t)sc->sc_map_priv.r_vaddr);
+	lo_hi_writeq(&sc->sc_map_priv, LPSS_PRIV_REMAP_ADDR,
+			(uintptr_t)sc->sc_map_priv.r_vaddr);
 }
 
 static void intel_lpss_deassert_reset(const struct lpss_softc *sc)
 {
-	uint32_t value = LPSS_PRIV_RESETS_FUNC | LPSS_PRIV_RESETS_IDMA;
-
 	/* Bring out the device from reset */
-	LPSS_PRIV_WRITE_4(sc, LPSS_PRIV_RESETS, value);
+	LPSS_PRIV_WRITE_4(sc, LPSS_PRIV_RESETS,
+			LPSS_PRIV_RESETS_FUNC | LPSS_PRIV_RESETS_IDMA);
 }
 
 static void intel_lpss_init_dev(const struct lpss_softc *sc)
 {
-	uint32_t value = LPSS_PRIV_SSP_REG_DIS_DMA_FIN;
-
 	intel_lpss_deassert_reset(sc);
 
-	if (!intel_lpss_has_idma(sc))
-		return;
+	if (intel_lpss_has_idma(sc)) {
+		intel_lpss_set_remap_addr(sc);
 
-	intel_lpss_set_remap_addr(sc);
-
-	/* Make sure that SPI multiblock DMA transfers are re-enabled */
-	if (sc->sc_type == LPSS_PRIV_TYPE_SPI)
-		LPSS_PRIV_WRITE_4(sc, LPSS_PRIV_SSP_REG, value);
-}
-
-#if 0
-static int intel_lpss_register_clock_divider(struct lpss_softc *sc)
-{
-// 	char name[32];
-// 	struct clk *tmp = *clk;
-//
-// 	snprintf(name, sizeof(name), "%s-enable", devname);
-// 	tmp = clk_register_gate(NULL, name, __clk_get_name(tmp), 0,
-// 				lpss->priv, 0, 0, NULL);
-// 	if (IS_ERR(tmp))
-// 		return PTR_ERR(tmp);
-//
-// 	snprintf(name, sizeof(name), "%s-div", devname);
-// 	tmp = clk_register_fractional_divider(NULL, name, __clk_get_name(tmp),
-// 					      0, lpss->priv, 1, 15, 16, 15, 0,
-// 					      NULL);
-// 	if (IS_ERR(tmp))
-// 		return PTR_ERR(tmp);
-// 	*clk = tmp;
-//
-// 	snprintf(name, sizeof(name), "%s-update", devname);
-// 	tmp = clk_register_gate(NULL, name, __clk_get_name(tmp),
-// 				CLK_SET_RATE_PARENT, lpss->priv, 31, 0, NULL);
-// 	if (IS_ERR(tmp))
-// 		return PTR_ERR(tmp);
-// 	*clk = tmp;
-
-	return 0;
-}
-
-static int intel_lpss_register_clock(struct lpss_softc *sc)
-{
-// 	const struct mfd_cell *cell = lpss->cell;
-// 	struct clk *clk;
-// 	char devname[24];
-	int ret;
-
-	if (!sc->sc_clock_rate)
-		return 0;
-
-// 	/* Root clock */
-// 	clk = clk_register_fixed_rate(NULL, dev_name(lpss->dev), NULL,
-// 				      CLK_IS_ROOT, sc->sc_clock_rate);
-// 	if (IS_ERR(clk))
-// 		return PTR_ERR(clk);
-//
-// 	snprintf(devname, sizeof(devname), "%s.%d", cell->name, lpss->devid);
-
-	/*
-	 * Support for clock divider only if it has some preset value.
-	 * Otherwise we assume that the divider is not used.
-	 */
-	if (sc->sc_type != LPSS_PRIV_TYPE_I2C) {
-		ret = intel_lpss_register_clock_divider(sc);
-		if (ret)
-			goto err_clk_register;
+		/* Make sure that SPI multiblock DMA transfers are re-enabled */
+		if (sc->sc_type == LPSS_PRIV_TYPE_SPI) {
+			LPSS_PRIV_WRITE_4(sc, LPSS_PRIV_SSP_REG,
+					LPSS_PRIV_SSP_REG_DIS_DMA_FIN);
+		}
 	}
-
-// 	ret = -ENOMEM;
-//
-// 	/* Clock for the host controller */
-// 	lpss->clock = clkdev_create(clk, lpss->info->clock_con_id, "%s", devname);
-// 	if (!lpss->clock)
-// 		goto err_clk_register;
-//
-// 	lpss->clk = clk;
-
-	return 0;
-
-err_clk_register:
-// 	intel_lpss_unregister_clock_tree(clk);
-
-	return ret;
 }
-#endif
 
 static int
 lpss_pci_attach(device_t dev)
@@ -521,6 +450,7 @@ lpss_pci_attach(device_t dev)
 		goto error;
 	}
 
+	/* Read device capabilities */
 	sc->sc_caps = LPSS_PRIV_READ_4(sc, LPSS_PRIV_CAPS);
 	device_printf(dev, "Capabilities: 0x%08x\n", sc->sc_caps);
 	sc->sc_type = (sc->sc_caps & LPSS_PRIV_CAPS_TYPE_MASK) >> LPSS_PRIV_CAPS_TYPE_SHIFT;
@@ -533,18 +463,19 @@ lpss_pci_attach(device_t dev)
 			sc->sc_type == LPSS_PRIV_TYPE_UART ? "UART" :
 			sc->sc_type == LPSS_PRIV_TYPE_SPI ? "SPI" : "Unknown");
 
+	/* Finish initialization */
 	intel_lpss_init_dev(sc);
 
 	return bus_generic_attach(dev);
 
 error:
-	if (sc->sc_mem_res != NULL)
-		bus_release_resource(dev, SYS_RES_MEMORY,
-		    sc->sc_mem_rid, sc->sc_mem_res);
-
+	bus_unmap_resource(sc->sc_dev, SYS_RES_MEMORY, sc->sc_mem_res, &sc->sc_map_priv);
+	bus_unmap_resource(sc->sc_dev, SYS_RES_MEMORY, sc->sc_mem_res, &sc->sc_map_dev);
+	if (sc->sc_mem_res != NULL) {
+		bus_release_resource(dev, SYS_RES_MEMORY, sc->sc_mem_rid, sc->sc_mem_res);
+	}
 	if (sc->sc_irq_res != NULL) {
-		bus_release_resource(dev, SYS_RES_IRQ,
-		    sc->sc_irq_rid, sc->sc_irq_res);
+		bus_release_resource(dev, SYS_RES_IRQ, sc->sc_irq_rid, sc->sc_irq_res);
 	}
 
 	return ENXIO;
@@ -561,13 +492,13 @@ lpss_pci_detach(device_t dev)
 		device_printf(dev, "Error getting softc from device.");
 		return ENXIO;
 	}
-	if (sc->sc_mem_res != NULL)
-		bus_release_resource(dev, SYS_RES_MEMORY,
-		    sc->sc_mem_rid, sc->sc_mem_res);
-
+	bus_unmap_resource(sc->sc_dev, SYS_RES_MEMORY, sc->sc_mem_res, &sc->sc_map_priv);
+	bus_unmap_resource(sc->sc_dev, SYS_RES_MEMORY, sc->sc_mem_res, &sc->sc_map_dev);
+	if (sc->sc_mem_res != NULL) {
+		bus_release_resource(dev, SYS_RES_MEMORY, sc->sc_mem_rid, sc->sc_mem_res);
+	}
 	if (sc->sc_irq_res != NULL) {
-		bus_release_resource(dev, SYS_RES_IRQ,
-		    sc->sc_irq_rid, sc->sc_irq_res);
+		bus_release_resource(dev, SYS_RES_IRQ, sc->sc_irq_rid, sc->sc_irq_res);
 	}
 	return bus_generic_detach(dev);
 }
@@ -581,13 +512,52 @@ lpss_pci_shutdown(device_t dev)
 static int
 lpss_pci_suspend(device_t dev)
 {
-	return (0);
+	struct lpss_softc *sc;
+	unsigned int i;
+
+	sc = device_get_softc(dev);
+	if (!sc) {
+		device_printf(dev, "Error getting softc from device.");
+		return ENXIO;
+	}
+
+	/* Save device context */
+	for (i = 0; i < LPSS_PRIV_REG_COUNT; i++) {
+		sc->priv_ctx[i] = LPSS_PRIV_READ_4(sc, i * 4);
+	}
+
+	/*
+	 * If the device type is not UART, then put the controller into
+	 * reset. UART cannot be put into reset since S3/S0ix fail when
+	 * no_console_suspend flag is enabled.
+	 */
+	if (sc->sc_type != LPSS_DEV_UART) {
+		LPSS_PRIV_WRITE_4(sc, LPSS_PRIV_RESETS, 0);
+	}
+
+	return 0;
 }
 
 static int
 lpss_pci_resume(device_t dev)
 {
-	return (0);
+	struct lpss_softc *sc;
+	unsigned int i;
+
+	sc = device_get_softc(dev);
+	if (!sc) {
+		device_printf(dev, "Error getting softc from device.");
+		return ENXIO;
+	}
+
+	intel_lpss_deassert_reset(sc);
+
+	/* Restore device context */
+	for (i = 0; i < LPSS_PRIV_REG_COUNT; i++) {
+		LPSS_PRIV_WRITE_4(sc, sc->priv_ctx[i], i * 4);
+	}
+
+	return 0;
 }
 
 static device_method_t lpss_pci_methods[] = {
