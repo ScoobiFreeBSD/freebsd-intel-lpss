@@ -593,3 +593,5 @@ static driver_t lpss_pci_driver = {
 static devclass_t lpss_devclass;
 
 DRIVER_MODULE(lpss, pci, lpss_pci_driver, lpss_devclass, 0, 0);
+MODULE_DEPEND(lpss, pci, 1, 1, 1);
+MODULE_VERSION(lpss, 1);
