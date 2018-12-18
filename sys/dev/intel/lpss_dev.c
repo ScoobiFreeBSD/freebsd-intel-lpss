@@ -403,6 +403,7 @@ lpss_pci_attach(device_t dev)
 {
 	struct lpss_softc *sc;
 	struct resource_map_request map_req;
+	int count;
 
 	sc = device_get_softc(dev);
 
@@ -413,13 +414,18 @@ lpss_pci_attach(device_t dev)
 	sc->sc_dev = dev;
 	sc->sc_mem_rid = PCIR_BAR(0);
 	sc->sc_mem_res = bus_alloc_resource_any(sc->sc_dev,
-	    SYS_RES_MEMORY, &sc->sc_mem_rid, RF_ACTIVE);
+	    SYS_RES_MEMORY, &sc->sc_mem_rid, RF_ACTIVE | RF_SHAREABLE);
 	if (sc->sc_mem_res == NULL) {
 		device_printf(dev, "Can't allocate memory resource\n");
 		goto error;
 	}
 
-	sc->sc_irq_rid = 0;
+	if (pci_alloc_msi(dev, &count) == 0) {
+		device_printf(dev, "Using MSI\n");
+		sc->sc_irq_rid = 1;
+	} else {
+		sc->sc_irq_rid = 0;
+	}
 	sc->sc_irq_res = bus_alloc_resource_any(sc->sc_dev,
 	    SYS_RES_IRQ, &sc->sc_irq_rid, RF_ACTIVE | RF_SHAREABLE);
 	if (sc->sc_irq_res == NULL) {
@@ -465,6 +471,12 @@ lpss_pci_attach(device_t dev)
 
 	/* Finish initialization */
 	intel_lpss_init_dev(sc);
+
+#if 0
+	if (sc->sc_type == LPSS_PRIV_TYPE_I2C) {
+		device_add_child(dev, "ig4iic_lpss", -1);
+	}
+#endif
 
 	return bus_generic_attach(dev);
 
@@ -560,6 +572,59 @@ lpss_pci_resume(device_t dev)
 	return 0;
 }
 
+static device_t
+lpss_add_child(device_t dev, u_int order, const char *name, int unit)
+{
+	return device_add_child_ordered(dev, order, name, unit);
+}
+
+#if 0
+static int
+lpss_child_present(device_t dev, device_t child)
+{
+	return (bus_child_present(dev));
+}
+
+static int
+lpss_read_ivar(device_t dev, device_t child, int which, uintptr_t *result)
+{
+	return(ENOENT);
+}
+
+static int
+lpss_write_ivar(device_t dev, device_t child, int which, uintptr_t value)
+{
+	return(ENOENT);
+}
+
+static struct resource *
+lpss_alloc_resource(device_t dev, device_t child, int type, int *rid,
+    rman_res_t start, rman_res_t end, rman_res_t count, u_int flags)
+{
+	return bus_generic_alloc_resource(dev, child, type, rid, start, end, count, flags);
+}
+
+static int
+lpss_release_resource(device_t dev, device_t child, int type, int rid,
+    struct resource *r)
+{
+	return bus_generic_release_resource(dev, child, type, rid, r);
+}
+
+static int
+lpss_adjust_resource(device_t bus, device_t child, int type, struct resource *r,
+    rman_res_t start, rman_res_t end)
+{
+	return bus_generic_adjust_resource(bus, child, type, r, start, end);
+}
+
+static int
+lpss_print_child(device_t bus, device_t child)
+{
+	return BUS_PRINT_CHILD(bus, child);
+}
+#endif
+
 static device_method_t lpss_pci_methods[] = {
     /* Device interface */
     DEVMETHOD(device_probe,		lpss_pci_probe),
@@ -569,16 +634,20 @@ static device_method_t lpss_pci_methods[] = {
     DEVMETHOD(device_suspend,		lpss_pci_suspend),
     DEVMETHOD(device_resume,		lpss_pci_resume),
 
+    /* Bus interface */
+    DEVMETHOD(bus_add_child,		lpss_add_child),
 #if 0
-    DEVMETHOD(bus_alloc_resource,	lpss_bus_alloc_resource),
-    DEVMETHOD(bus_release_resource,	lpss_bus_release_resource),
-    DEVMETHOD(bus_get_resource,		lpss_bus_get_resource),
-    DEVMETHOD(bus_read_ivar,		lpss_bus_read_ivar),
-    DEVMETHOD(bus_setup_intr,		lpss_bus_setup_intr),
-    DEVMETHOD(bus_teardown_intr,	lpss_bus_teardown_intr),
-    DEVMETHOD(bus_print_child,		lpss_bus_print_child),
-    DEVMETHOD(bus_child_pnpinfo_str,	lpss_bus_child_pnpinfo_str),
-    DEVMETHOD(bus_child_location_str,	lpss_bus_child_location_str),
+    DEVMETHOD(bus_child_present,	lpss_child_present),		/* pcib_child_present */
+    DEVMETHOD(bus_read_ivar,		lpss_read_ivar),		/* pcib_read_ivar */
+    DEVMETHOD(bus_write_ivar,		lpss_write_ivar),		/* pcib_write_ivar */
+    DEVMETHOD(bus_alloc_resource,	lpss_alloc_resource),		/* bus_generic_alloc_resource */
+    DEVMETHOD(bus_release_resource,	lpss_release_resource),		/* bus_generic_release_resource */
+    DEVMETHOD(bus_adjust_resource,	lpss_adjust_resource),		/* bus_generic_adjust_resource */
+    DEVMETHOD(bus_print_child,		lpss_print_child),		/* lpss_bus_print_child */
+    DEVMETHOD(bus_activate_resource,	bus_generic_activate_resource),
+    DEVMETHOD(bus_deactivate_resource,	bus_generic_deactivate_resource),
+    DEVMETHOD(bus_setup_intr,		bus_generic_setup_intr),
+    DEVMETHOD(bus_teardown_intr,	bus_generic_teardown_intr),
 #endif
 
     DEVMETHOD_END

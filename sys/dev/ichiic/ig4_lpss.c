@@ -67,42 +67,10 @@ __FBSDID("$FreeBSD$");
 
 static int ig4iic_lpss_detach(device_t dev);
 
-struct ig4iic_lpss_device {
-	const char	*desc;
-};
-
-#if 0
-static struct ig4iic_lpss_device ig4iic_lpss_devices[] = {
-	{ "Intel Lynx Point-LP I2C Controller-1" },
-	{ "Intel Lynx Point-LP I2C Controller-2" },
-	{ "Intel Braswell Serial I/O I2C Port 1" },
-	{ "Intel Braswell Serial I/O I2C Port 2" },
-	{ "Intel Braswell Serial I/O I2C Port 3" },
-	{ "Intel Braswell Serial I/O I2C Port 5" },
-	{ "Intel Braswell Serial I/O I2C Port 6" },
-	{ "Intel Braswell Serial I/O I2C Port 7" },
-	{ "Intel Sunrise Point-LP I2C Controller-0" },
-	{ "Intel Sunrise Point-LP I2C Controller-1" },
-	{ "Intel Sunrise Point-LP I2C Controller-2" },
-	{ "Intel Sunrise Point-LP I2C Controller-3" },
-	{ "Intel Sunrise Point-LP I2C Controller-4" },
-	{ "Intel Sunrise Point-LP I2C Controller-5" },
-	{ "Intel Sunrise Point-H I2C Controller-0" },
-	{ "Intel Sunrise Point-H I2C Controller-1" },
-	{ "Intel Apollo Lake I2C Controller-0" },
-	{ "Intel Apollo Lake I2C Controller-1" },
-	{ "Intel Apollo Lake I2C Controller-2" },
-	{ "Intel Apollo Lake I2C Controller-3" },
-	{ "Intel Apollo Lake I2C Controller-4" },
-	{ "Intel Apollo Lake I2C Controller-5" },
-	{ "Intel Apollo Lake I2C Controller-6" },
-	{ "Intel Apollo Lake I2C Controller-7" }
-};
-#endif
-
 static int
 ig4iic_lpss_probe(device_t dev)
 {
+#if 0
 //	ig4iic_softc_t *sc = device_get_softc(dev);
 	devclass_t dc;
 	device_t *devices = NULL;
@@ -114,62 +82,89 @@ ig4iic_lpss_probe(device_t dev)
 			int i;
 
 			for (i = 0; i < num_devices; ++i) {
-				device_printf(dev, "Found lpss class device unit %d.\n", device_get_unit(devices[i]));
+				device_printf(dev, "HOORAY! Found lpss class device unit %d.\n", device_get_unit(devices[i]));
 			}
 			free(devices, M_TEMP);
+			return (BUS_PROBE_DEFAULT);
 		} else {
 			device_printf(dev, "No lpss class devices found.\n");
 		}
 	} else {
 		device_printf(dev, "lpss class not found.\n");
 	}
-	return (ENXIO);
+#else
+	device_printf(dev, "%s: Returning BUS_PROBE_NOWILDCARD.\n", __func__);
+	return BUS_PROBE_NOWILDCARD;
+#endif
 }
+
+#if defined(USE_DEV_IDENTIFY)
+static void
+ig4iic_lpss_identify(driver_t *driver, device_t parent)
+{
+	/* Add only a single device instance. */
+	device_printf(dev, "%s: Entered.\n", __func__);
+	if (device_find_child(parent, "ig4iic_lpss", -1) == NULL) {
+		if (BUS_ADD_CHILD(parent, 0, "ig4iic_lpss", -1) == NULL) {
+			device_printf(parent, "add ig4iic_lpss child failed\n");
+		}
+	}
+}
+#endif
 
 static int
 ig4iic_lpss_attach(device_t dev)
 {
-//	ig4iic_softc_t *sc = device_get_softc(dev);
 	int error = ENXIO;
 
+	device_printf(dev, "%s: Entered.\n", __func__);
 #if 0
+	ig4iic_softc_t *sc = device_get_softc(dev);
+	int count = 1;
+
 	sc->dev = dev;
 	sc->regs_rid = PCIR_BAR(0);
 	sc->regs_res = bus_alloc_resource_any(dev, SYS_RES_MEMORY,
 					  &sc->regs_rid, RF_ACTIVE);
 	if (sc->regs_res == NULL) {
 		device_printf(dev, "unable to map registers\n");
-		ig4iic_pci_detach(dev);
+		ig4iic_lpss_detach(dev);
 		return (ENXIO);
 	}
-	sc->intr_rid = 0;
-	if (pci_alloc_msi(dev, &sc->intr_rid)) {
+	if (pci_alloc_msi(dev, &count) == 0) {
 		device_printf(dev, "Using MSI\n");
+		sc->intr_type = INTR_TYPE_MSI;
+		sc->intr_rid = 1;
+	}
+	else
+	{
+		sc->intr_type = INTR_TYPE_PCI;
+		sc->intr_rid = 0;
 	}
 	sc->intr_res = bus_alloc_resource_any(dev, SYS_RES_IRQ,
 					  &sc->intr_rid, RF_SHAREABLE | RF_ACTIVE);
 	if (sc->intr_res == NULL) {
 		device_printf(dev, "unable to map interrupt\n");
-		ig4iic_pci_detach(dev);
+		ig4iic_lpss_detach(dev);
 		return (ENXIO);
 	}
 	sc->platform_attached = 1;
 
 	error = ig4iic_attach(sc);
 	if (error)
-		ig4iic_pci_detach(dev);
-
+		ig4iic_lpss_detach(dev);
 #endif
+
 	return (error);
 }
 
 static int
 ig4iic_lpss_detach(device_t dev)
 {
-//	ig4iic_softc_t *sc = device_get_softc(dev);
 	int error = 0;
+	ig4iic_softc_t *sc = device_get_softc(dev);
 
-#if 0
+	device_printf(dev, "%s: Entered.\n", __func__);
 	if (sc->platform_attached) {
 		error = ig4iic_detach(sc);
 		if (error)
@@ -182,21 +177,23 @@ ig4iic_lpss_detach(device_t dev)
 				     sc->intr_rid, sc->intr_res);
 		sc->intr_res = NULL;
 	}
-	if (sc->intr_rid != 0)
+	if (sc->intr_type == INTR_TYPE_MSI) {
 		pci_release_msi(dev);
+	}
 	if (sc->regs_res) {
 		bus_release_resource(dev, SYS_RES_MEMORY,
 				     sc->regs_rid, sc->regs_res);
 		sc->regs_res = NULL;
 	}
-
-#endif
 	return (error);
 }
 
 static device_method_t ig4iic_lpss_methods[] = {
 	/* Device interface */
 	DEVMETHOD(device_probe, ig4iic_lpss_probe),
+#if defined(USE_DEV_IDENTIFY)
+	DEVMETHOD(device_identify,ig4iic_lpss_identify),
+#endif
 	DEVMETHOD(device_attach, ig4iic_lpss_attach),
 	DEVMETHOD(device_detach, ig4iic_lpss_detach),
 
@@ -215,7 +212,7 @@ static driver_t ig4iic_lpss_driver = {
 
 static devclass_t ig4iic_lpss_devclass;
 
-DRIVER_MODULE_ORDERED(ig4iic_lpss, pci, ig4iic_lpss_driver, ig4iic_lpss_devclass, 0, 0,
+DRIVER_MODULE_ORDERED(ig4iic_lpss, lpss, ig4iic_lpss_driver, ig4iic_lpss_devclass, 0, 0,
     SI_ORDER_ANY);
 MODULE_DEPEND(ig4iic_lpss, lpss, 1, 1, 1);
 MODULE_DEPEND(ig4iic_lpss, iicbus, IICBUS_MINVER, IICBUS_PREFVER, IICBUS_MAXVER);
