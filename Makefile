@@ -18,7 +18,7 @@ SUDO_DEPS=	has-sudo
 CTAGS=		exctags
 TAGSFILE=	tags
 
-DEFAULT_TARGET=	help
+DEFAULT_TARGET=	all
 ALL_TARGET=	modules
 
 default: $(DEFAULT_TARGET)
