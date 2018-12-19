@@ -65,6 +65,8 @@ __FBSDID("$FreeBSD$");
 #include <dev/ichiic/ig4_reg.h>
 #include <dev/ichiic/ig4_var.h>
 
+#define USE_DEV_IDENTIFY 1
+
 static int ig4iic_lpss_detach(device_t dev);
 
 static int
@@ -103,7 +105,7 @@ static void
 ig4iic_lpss_identify(driver_t *driver, device_t parent)
 {
 	/* Add only a single device instance. */
-	device_printf(dev, "%s: Entered.\n", __func__);
+	device_printf(parent, "%s: Entered.\n", __func__);
 	if (device_find_child(parent, "ig4iic_lpss", -1) == NULL) {
 		if (BUS_ADD_CHILD(parent, 0, "ig4iic_lpss", -1) == NULL) {
 			device_printf(parent, "add ig4iic_lpss child failed\n");
@@ -118,18 +120,19 @@ ig4iic_lpss_attach(device_t dev)
 	int error = ENXIO;
 
 	device_printf(dev, "%s: Entered.\n", __func__);
-#if 0
 	ig4iic_softc_t *sc = device_get_softc(dev);
 	int count = 1;
 
 	sc->dev = dev;
 	sc->regs_rid = PCIR_BAR(0);
 	sc->regs_res = bus_alloc_resource_any(dev, SYS_RES_MEMORY,
-					  &sc->regs_rid, RF_ACTIVE);
+					  &sc->regs_rid, RF_SHAREABLE | RF_ACTIVE);
 	if (sc->regs_res == NULL) {
-		device_printf(dev, "unable to map registers\n");
+		device_printf(dev, "%s: Unable to map registers\n", __func__);
 		ig4iic_lpss_detach(dev);
 		return (ENXIO);
+	} else {
+		device_printf(dev, "%s: Got memory resource.\n", __func__);
 	}
 	if (pci_alloc_msi(dev, &count) == 0) {
 		device_printf(dev, "Using MSI\n");
@@ -144,17 +147,19 @@ ig4iic_lpss_attach(device_t dev)
 	sc->intr_res = bus_alloc_resource_any(dev, SYS_RES_IRQ,
 					  &sc->intr_rid, RF_SHAREABLE | RF_ACTIVE);
 	if (sc->intr_res == NULL) {
-		device_printf(dev, "unable to map interrupt\n");
+		device_printf(dev, "Unable to map interrupt\n");
 		ig4iic_lpss_detach(dev);
 		return (ENXIO);
+	} else {
+		device_printf(dev, "%s: Got interrupt resource.\n", __func__);
 	}
 	sc->platform_attached = 1;
 
 	error = ig4iic_attach(sc);
 	if (error)
 		ig4iic_lpss_detach(dev);
-#endif
 
+	device_printf(dev, "%s: Returning %d.\n", __func__, error);
 	return (error);
 }
 

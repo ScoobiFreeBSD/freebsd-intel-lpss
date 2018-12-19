@@ -522,6 +522,7 @@ ig4iic_attach(ig4iic_softc_t *sc)
 	int error;
 	uint32_t v;
 
+	device_printf(sc->dev, "%s: Entered.\n", __func__);
 	mtx_init(&sc->io_lock, "IG4 I/O lock", NULL, MTX_DEF);
 	sx_init(&sc->call_lock, "IG4 call lock");
 
@@ -565,6 +566,7 @@ ig4iic_attach(ig4iic_softc_t *sc)
 		v = reg_read(sc, IG4_REG_COMP_VER);
 		if (v < IG4_COMP_MIN_VER) {
 			error = ENXIO;
+			device_printf(sc->dev, "%s: Error: Version %u too low.\n", __func__, v);
 			goto done;
 		}
 	}
@@ -628,15 +630,15 @@ ig4iic_attach(ig4iic_softc_t *sc)
 
 	mtx_lock(&sc->io_lock);
 	if (set_controller(sc, 0))
-		device_printf(sc->dev, "controller error during attach-1\n");
+		device_printf(sc->dev, "%s: controller error during attach-1\n", __func__);
 	if (set_controller(sc, IG4_I2C_ENABLE))
-		device_printf(sc->dev, "controller error during attach-2\n");
+		device_printf(sc->dev, "%s: controller error during attach-2\n", __func__);
 	mtx_unlock(&sc->io_lock);
 	error = bus_setup_intr(sc->dev, sc->intr_res, INTR_TYPE_MISC | INTR_MPSAFE,
 			       NULL, ig4iic_intr, sc, &sc->intr_handle);
 	if (error) {
 		device_printf(sc->dev,
-			      "Unable to setup irq: error %d\n", error);
+			      "%s: Unable to setup irq: error %d\n", __func__, error);
 	}
 
 	sc->enum_hook.ich_func = ig4iic_start;
@@ -646,12 +648,14 @@ ig4iic_attach(ig4iic_softc_t *sc)
 	 * We have to wait until interrupts are enabled. I2C read and write
 	 * only works if the interrupts are available.
 	 */
-	if (config_intrhook_establish(&sc->enum_hook) != 0)
+	if (config_intrhook_establish(&sc->enum_hook) != 0) {
+		device_printf(sc->dev, "%s: Error establishing interrupt hook.\n", __func__);
 		error = ENOMEM;
-	else
+	} else
 		error = 0;
 
 done:
+	device_printf(sc->dev, "%s: Returning %d.\n", __func__, error);
 	return (error);
 }
 
@@ -664,6 +668,7 @@ ig4iic_start(void *xdev)
 
 	sc = device_get_softc(dev);
 
+	device_printf(sc->dev, "%s: Entered.\n", __func__);
 	config_intrhook_disestablish(&sc->enum_hook);
 
 	error = bus_generic_attach(sc->dev);

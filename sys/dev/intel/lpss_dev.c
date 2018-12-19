@@ -575,32 +575,37 @@ lpss_pci_resume(device_t dev)
 static device_t
 lpss_add_child(device_t dev, u_int order, const char *name, int unit)
 {
+	device_printf(dev, "%s: Entered order=%u name=\"%s\" unit=%d.\n", __func__,
+			order, name, unit);
 	return device_add_child_ordered(dev, order, name, unit);
-}
-
-#if 0
-static int
-lpss_child_present(device_t dev, device_t child)
-{
-	return (bus_child_present(dev));
-}
-
-static int
-lpss_read_ivar(device_t dev, device_t child, int which, uintptr_t *result)
-{
-	return(ENOENT);
-}
-
-static int
-lpss_write_ivar(device_t dev, device_t child, int which, uintptr_t value)
-{
-	return(ENOENT);
 }
 
 static struct resource *
 lpss_alloc_resource(device_t dev, device_t child, int type, int *rid,
     rman_res_t start, rman_res_t end, rman_res_t count, u_int flags)
 {
+	struct lpss_softc *sc;
+
+	device_printf(dev, "%s: Entered.\n", __func__);
+	sc = device_get_softc(dev);
+	switch (type)
+	{
+		case SYS_RES_MEMORY:
+			if (*rid == sc->sc_mem_rid) {
+				device_printf(dev, "%s: Returning memory resource 0x%p.\n", __func__, sc->sc_mem_res);
+				return sc->sc_mem_res;
+			}
+			break;
+		case SYS_RES_IRQ:
+			if (*rid == sc->sc_irq_rid) {
+				device_printf(dev, "%s: Returning IRQ resource 0x%p.\n", __func__, sc->sc_mem_res);
+				return sc->sc_irq_res;
+			}
+			break;
+
+		default:
+			break;
+	}
 	return bus_generic_alloc_resource(dev, child, type, rid, start, end, count, flags);
 }
 
@@ -608,6 +613,7 @@ static int
 lpss_release_resource(device_t dev, device_t child, int type, int rid,
     struct resource *r)
 {
+	device_printf(dev, "%s: Entered.\n", __func__);
 	return bus_generic_release_resource(dev, child, type, rid, r);
 }
 
@@ -615,12 +621,36 @@ static int
 lpss_adjust_resource(device_t bus, device_t child, int type, struct resource *r,
     rman_res_t start, rman_res_t end)
 {
+	device_printf(bus, "%s: Entered.\n", __func__);
 	return bus_generic_adjust_resource(bus, child, type, r, start, end);
+}
+
+#if 0
+static int
+lpss_child_present(device_t dev, device_t child)
+{
+	device_printf(dev, "%s: Entered.\n", __func__);
+	return (bus_child_present(dev));
+}
+
+static int
+lpss_read_ivar(device_t dev, device_t child, int which, uintptr_t *result)
+{
+	device_printf(dev, "%s: Entered.\n", __func__);
+	return(ENOENT);
+}
+
+static int
+lpss_write_ivar(device_t dev, device_t child, int which, uintptr_t value)
+{
+	device_printf(dev, "%s: Entered.\n", __func__);
+	return(ENOENT);
 }
 
 static int
 lpss_print_child(device_t bus, device_t child)
 {
+	device_printf(dev, "%s: Entered.\n", __func__);
 	return BUS_PRINT_CHILD(bus, child);
 }
 #endif
@@ -636,13 +666,15 @@ static device_method_t lpss_pci_methods[] = {
 
     /* Bus interface */
     DEVMETHOD(bus_add_child,		lpss_add_child),
+    DEVMETHOD(bus_alloc_resource,	lpss_alloc_resource),		/* bus_generic_alloc_resource */
+    DEVMETHOD(bus_release_resource,	lpss_release_resource),		/* bus_generic_release_resource */
+    DEVMETHOD(bus_adjust_resource,	lpss_adjust_resource),		/* bus_generic_adjust_resource */
+    DEVMETHOD(bus_setup_intr,		bus_generic_setup_intr),
+    DEVMETHOD(bus_teardown_intr,	bus_generic_teardown_intr),
 #if 0
     DEVMETHOD(bus_child_present,	lpss_child_present),		/* pcib_child_present */
     DEVMETHOD(bus_read_ivar,		lpss_read_ivar),		/* pcib_read_ivar */
     DEVMETHOD(bus_write_ivar,		lpss_write_ivar),		/* pcib_write_ivar */
-    DEVMETHOD(bus_alloc_resource,	lpss_alloc_resource),		/* bus_generic_alloc_resource */
-    DEVMETHOD(bus_release_resource,	lpss_release_resource),		/* bus_generic_release_resource */
-    DEVMETHOD(bus_adjust_resource,	lpss_adjust_resource),		/* bus_generic_adjust_resource */
     DEVMETHOD(bus_print_child,		lpss_print_child),		/* lpss_bus_print_child */
     DEVMETHOD(bus_activate_resource,	bus_generic_activate_resource),
     DEVMETHOD(bus_deactivate_resource,	bus_generic_deactivate_resource),
