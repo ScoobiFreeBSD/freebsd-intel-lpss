@@ -60,6 +60,7 @@ __FBSDID("$FreeBSD$");
 
 #include <dev/pci/pcivar.h>
 #include <dev/pci/pcireg.h>
+#include <dev/iicbus/iicbus.h>
 #include <dev/iicbus/iiconf.h>
 
 #include <dev/ichiic/ig4_reg.h>
@@ -219,6 +220,7 @@ static devclass_t ig4iic_lpss_devclass;
 
 DRIVER_MODULE_ORDERED(ig4iic_lpss, lpss, ig4iic_lpss_driver, ig4iic_lpss_devclass, 0, 0,
     SI_ORDER_ANY);
+DRIVER_MODULE(iicbus, ig4iic_lpss, iicbus_driver, iicbus_devclass, NULL, NULL);
 MODULE_DEPEND(ig4iic_lpss, lpss, 1, 1, 1);
 MODULE_DEPEND(ig4iic_lpss, iicbus, IICBUS_MINVER, IICBUS_PREFVER, IICBUS_MAXVER);
 MODULE_VERSION(ig4iic_lpss, 1);

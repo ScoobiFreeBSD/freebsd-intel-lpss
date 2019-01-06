@@ -799,7 +799,3 @@ ig4iic_dump(ig4iic_softc_t *sc)
 	}
 }
 #undef REGDUMP
-
-DRIVER_MODULE(iicbus, ig4iic_acpi, iicbus_driver, iicbus_devclass, NULL, NULL);
-DRIVER_MODULE(iicbus, ig4iic_pci, iicbus_driver, iicbus_devclass, NULL, NULL);
-DRIVER_MODULE(iicbus, ig4iic_lpss, iicbus_driver, iicbus_devclass, NULL, NULL);

@@ -43,6 +43,7 @@ __FBSDID("$FreeBSD$");
 #include <contrib/dev/acpica/include/accommon.h>
 
 #include <dev/acpica/acpivar.h>
+#include <dev/iicbus/iicbus.h>
 #include <dev/iicbus/iiconf.h>
 
 #include <dev/ichiic/ig4_reg.h>
@@ -174,6 +175,7 @@ static driver_t ig4iic_acpi_driver = {
 
 static devclass_t ig4iic_acpi_devclass;
 DRIVER_MODULE(ig4iic_acpi, acpi, ig4iic_acpi_driver, ig4iic_acpi_devclass, 0, 0);
+DRIVER_MODULE(iicbus, ig4iic_acpi, iicbus_driver, iicbus_devclass, NULL, NULL);
 
 MODULE_DEPEND(ig4iic_acpi, acpi, 1, 1, 1);
 MODULE_DEPEND(ig4iic_acpi, pci, 1, 1, 1);
